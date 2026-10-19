@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#f7c61b">
+<style>
+html{background:#f7c61b}
+.sp{position:fixed;inset:0;z-index:10000;background:#f7c61b;color:#1c2b24;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;padding:16px;text-align:center;overflow:hidden;transition:opacity .5s;font-family:'Familjen Grotesk',system-ui,sans-serif;cursor:pointer}
+.sp.out{opacity:0}.sp h1{margin:0;font-size:clamp(2.1rem,10vw,3.6rem)}.sp p{margin:0;font-size:1.05rem}
+.sp-road{position:absolute;left:0;right:0;bottom:28%;height:6px;background:#1c2b24}
+.sp-auto{position:absolute;bottom:calc(28% + 6px);left:0;width:120px;animation:sp-go 2.8s cubic-bezier(.4,0,.6,1) forwards}
+.sp-auto svg{display:block;animation:sp-hop .35s ease-in-out infinite alternate}
+@keyframes sp-go{from{transform:translateX(-140px)}to{transform:translateX(calc(100vw + 20px))}}
+@keyframes sp-hop{to{transform:translateY(-3px)}}
+@media (prefers-reduced-motion:reduce){.sp-auto{animation:none;left:calc(50% - 60px)}.sp-auto svg{animation:none}}
+</style>
+<title>AutoFare Kerala | Know the right fare</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css" media="print" onload="this.media='all'">
+<link href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="sp" id="sp"><h1>AutoFare Kerala</h1><p>Know the right fare before you pay</p><div class="sp-road"></div>
+<div class="sp-auto"><svg viewBox="0 0 120 66" width="120" height="66" aria-hidden="true">
+<path d="M6 50 L6 18 Q6 8 16 8 L66 8 Q74 8 78 16 L86 30 L104 36 Q112 38 112 46 L112 50 Z" fill="#1c2b24"/>
+<path d="M14 15 H66 Q70 15 72 19 L77 28 H14 Z" fill="#d8eef5"/>
+<rect x="6" y="38" width="106" height="5" fill="#fff6c2"/>
+<circle cx="109" cy="44" r="3" fill="#ffe066"/>
+<circle cx="26" cy="52" r="11" fill="#111"/><circle cx="26" cy="52" r="4" fill="#cfcfcf"/>
+<circle cx="98" cy="52" r="11" fill="#111"/><circle cx="98" cy="52" r="4" fill="#cfcfcf"/>
+</svg></div></div>
+<script>(function(){var d=document.getElementById('sp'),g=false;function bye(){if(g)return;g=true;d.classList.add('out');setTimeout(function(){d.remove()},550)}d.onclick=bye;setTimeout(bye,3100)})();</script>
+<header><div class="logo">🛺 AutoFare</div><span>Know the right fare before you pay</span></header>
+<main>
+<div id="map" aria-label="Map"></div>
+<section class="panel">
+<nav role="tablist">
+<button aria-selected="true" data-tab="plan">Plan trip</button>
+<button aria-selected="false" data-tab="live">Live ride</button>
+<button aria-selected="false" data-tab="chart">Fare chart</button>
+<button aria-selected="false" data-tab="tariff">Tariff</button>
+</nav>
+
+<div id="plan" class="tab">
+<label for="from">From</label>
+<div class="inline"><input id="from" placeholder="e.g. Palakkad bus stand"><button class="ghost" id="locBtn" title="Use my location">📍</button></div>
+<label for="to">To</label><input id="to" placeholder="e.g. NSS College of Engineering">
+<label for="pw">Expected waiting (minutes)</label><input id="pw" type="number" min="0" value="0">
+<label class="check"><input type="checkbox" id="pn"> Night ride</label>
+<button class="main" id="routeBtn">Find route and fare</button>
+<div id="planOut" class="out hide">
+<div class="hint">Road distance <b id="pKm"></b>, about <b id="pMin"></b></div>
+<div class="big" id="pFare"></div>
+<label for="pAsk">Driver asked (₹)</label><input id="pAsk" type="number" min="0">
+<div id="pVerdict" class="hint"></div>
+</div>
+<div id="planMsg" class="hint"></div>
+</div>
+
+<div id="live" class="tab hide">
+<div class="meter">
+<div class="fare"><small>₹</small><span id="fare">0</span></div>
+<div class="row"><div><span>Distance</span><b id="dist">0.00 km</b></div><div><span>Waiting</span><b id="wait">0:00</b></div><div><span>Night rate</span><b id="nf">Off</b></div></div>
+<div class="status" id="status">Press Start when the ride begins.</div>
+</div>
+<div class="btns"><button class="main" id="startBtn">Start ride</button><button class="main stop hide" id="endBtn">End ride</button></div>
+<label class="check"><input type="checkbox" id="demo"> Demo mode (simulates a ride along the planned route)</label>
+<div class="card hide" id="summary">
+<div class="hint">Fare for this ride</div><div class="big" id="sumFare"></div><div class="hint" id="sumDetail"></div>
+<label for="asked">Driver asked (₹)</label><input id="asked" type="number" min="0">
+<div id="askedOut" class="hint"></div>
+<label for="upi">Driver’s UPI ID</label><input id="upi" placeholder="name@bank" autocapitalize="off">
+<div class="btns"><a class="main" id="pay" href="#">Pay by UPI</a><button class="main ghost" id="shareBtn">Share trip</button></div>
+</div>
+<div class="card hide" id="histCard"><b>Past rides</b><ul id="hist"></ul></div>
+</div>
+
+<div id="chart" class="tab hide">
+<b>Fare for every distance</b>
+<div class="hint">Calculated from the Tariff tab. Waiting charges are not included.</div>
+<table><thead><tr><th>Distance</th><th>Day fare</th><th>Night fare</th></tr></thead><tbody id="chartBody"></tbody></table>
+</div>
+
+<div id="tariff" class="tab hide">
+<b>Tariff rates</b>
+<div class="hint">Rates are placeholders. Check the latest official tariff for your district and update them here.</div>
+<label for="tMin">Minimum fare (₹)</label><input id="tMin" type="number" step="0.5">
+<label for="tMinKm">Minimum fare covers (km)</label><input id="tMinKm" type="number" step="0.1">
+<label for="tKm">Each extra km (₹)</label><input id="tKm" type="number" step="0.5">
+<label for="tWait">Waiting per minute (₹)</label><input id="tWait" type="number" step="0.5">
+<label for="tNight">Night extra (%)</label><input id="tNight" type="number" step="5">
+<label for="tFrom">Night starts (hour 0–23)</label><input id="tFrom" type="number" min="0" max="23">
+<label for="tTo">Night ends (hour 0–23)</label><input id="tTo" type="number" min="0" max="23">
+<button class="main ghost" id="resetT">Reset to defaults</button>
+</div>
+</section>
+</main>
+<footer>Maps © OpenStreetMap contributors. Routes by OSRM. Fares are estimates, not official.</footer>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
