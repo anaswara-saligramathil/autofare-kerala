@@ -1,5 +1,7 @@
 # AutoFare Kerala
 
+Live Website: https://autofarekeralam.netlify.app/
+
 A web app that helps passengers pay the right fare for auto-rickshaws. Built for passengers, so drivers don't need to do anything.
 
 ## Features
