@@ -167,10 +167,16 @@ function hist(){
 const scanBtn=document.createElement('button');
 scanBtn.type='button';scanBtn.className='main ghost';scanBtn.textContent='📷 Scan driver’s QR code';
 $('upi').after(scanBtn);
-let stream=null,scanning=false;
+/* Backup: pick a photo or screenshot of the QR (works even when the live camera is blocked) */
+const fileBtn=document.createElement('button');
+fileBtn.type='button';fileBtn.className='main ghost';fileBtn.textContent='🖼️ Upload QR photo';
+const fileIn=document.createElement('input');fileIn.type='file';fileIn.accept='image/*';fileIn.style.display='none';
+scanBtn.after(fileBtn);fileBtn.after(fileIn);
+
+let stream=null,scanning=false,detector=null;
 const box=document.createElement('div');
 box.style.cssText='position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:none;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:16px;color:#fff;text-align:center';
-const vid=document.createElement('video');vid.setAttribute('playsinline','');vid.muted=true;
+const vid=document.createElement('video');vid.setAttribute('playsinline','');vid.setAttribute('autoplay','');vid.muted=true;
 vid.style.cssText='width:100%;max-width:420px;border-radius:16px;border:4px solid #f7c61b';
 const boxMsg=document.createElement('div');
 const cancel=document.createElement('button');cancel.type='button';cancel.className='main stop';cancel.style.maxWidth='420px';cancel.textContent='Cancel';
@@ -181,55 +187,115 @@ function stopScan(){
   vid.srcObject=null;box.style.display='none';
 }
 cancel.onclick=stopScan;
-const loadJsQR=()=>new Promise((ok,no)=>{
-  if(window.jsQR)return ok();
-  const sc=document.createElement('script');
-  sc.src='https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
-  sc.onload=ok;sc.onerror=()=>no(new Error('Could not load the QR reader. Check your internet.'));
-  document.head.appendChild(sc);
+
+/* jsQR: loads from our own folder first (js/jsQR.js), then from two CDNs */
+const loadScript=src=>new Promise((ok,no)=>{
+  const s=document.createElement('script');s.src=src;s.onload=ok;s.onerror=()=>{s.remove();no()};document.head.appendChild(s);
 });
+const loadJsQR=async()=>{
+  if(window.jsQR)return;
+  const urls=['js/jsQR.js','https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js','https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js'];
+  for(const u of urls){try{await loadScript(u);if(window.jsQR)return}catch(e){}}
+  throw new Error('Could not load the QR reader. Check your internet, or use Upload QR photo.');
+};
+
+/* Read the payee from a UPI QR. Accepts upi://pay?..., UPI://PAY?..., and links that carry a pa= value */
 function readUpi(text){
-  if(!/^upi:\/\/pay\?/i.test(text))return null;
-  const q=new URLSearchParams(text.split('?')[1]);
+  text=String(text||'').trim();
+  const i=text.indexOf('?');
+  if(i<0)return null;
+  const head=text.slice(0,i).toLowerCase();
+  let q;try{q=new URLSearchParams(text.slice(i+1))}catch(e){return null}
   const pa=(q.get('pa')||'').trim();
-  return pa?{pa,pn:(q.get('pn')||'').trim()}:null;
+  if(!pa||!/^[\w.\-+]{2,}@[\w.\-]{2,}$/.test(pa))return null;
+  if(!(head.startsWith('upi:')||head.startsWith('http')))return null;
+  return{pa,pn:(q.get('pn')||'').trim()};
+}
+function gotCode(text){
+  const r=readUpi(text);
+  if(!r)return false;
+  stopScan();$('upi').value=r.pa;payee=r.pn||'Auto driver';pay();
+  payMsg('QR scanned: '+(r.pn?r.pn+' ':'')+'('+r.pa+'). Check that the name is correct before you pay.');
+  return true;
+}
+/* Decode one frame or image. Uses the phone's built-in reader when it exists, otherwise jsQR */
+async function decode(src,w,h,ctx){
+  if(detector){
+    try{const c=await detector.detect(src);if(c.length&&c[0].rawValue)return c[0].rawValue}catch(e){}
+  }
+  if(window.jsQR){
+    const img=ctx.getImageData(0,0,w,h);
+    const c=window.jsQR(img.data,w,h,{inversionAttempts:'attemptBoth'});
+    if(c&&c.data)return c.data;
+  }
+  return null;
+}
+function camError(err){
+  const n=err&&err.name;
+  if(n==='NotAllowedError'||n==='SecurityError')return'Camera permission is blocked. Tap the lock icon in the address bar, allow Camera, and try again. Or use Upload QR photo.';
+  if(n==='NotFoundError'||n==='OverconstrainedError')return'No camera was found on this device. Use Upload QR photo, or type the UPI ID.';
+  if(n==='NotReadableError'||n==='AbortError')return'The camera is being used by another app. Close it and try again.';
+  return(err&&err.message)||'Could not start the camera.';
+}
+async function startDetector(){
+  if(detector||!('BarcodeDetector' in window))return;
+  try{detector=new BarcodeDetector({formats:['qr_code']})}catch(e){detector=null}
 }
 scanBtn.onclick=async()=>{
-  if(!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
-    payMsg('The camera is not available here. Open the https link on your phone, or type the UPI ID.');return;
+  payMsg('');
+  if(!window.isSecureContext||!navigator.mediaDevices||!navigator.mediaDevices.getUserMedia){
+    payMsg('The camera cannot open here. If this page is inside WhatsApp, Instagram or another app, open it in Chrome or Safari. Or use Upload QR photo.');return;
   }
+  /* Open the camera window first, so the video can start playing */
+  box.style.display='flex';boxMsg.textContent='Starting camera…';
   try{
-    await loadJsQR();
-    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'},audio:false});
+    await startDetector();
+    try{await loadJsQR()}catch(e){if(!detector)throw e}
+    try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280},height:{ideal:720}},audio:false})}
+    catch(e){stream=await navigator.mediaDevices.getUserMedia({video:true,audio:false})}
+    vid.srcObject=stream;
+    await vid.play();
   }catch(err){
-    payMsg(err&&err.name==='NotAllowedError'?'Camera permission is blocked. Allow the camera, or type the UPI ID.':((err&&err.message)||'Could not start the camera.'));
-    stopScan();return;
+    stopScan();payMsg(camError(err));return;
   }
-  vid.srcObject=stream;await vid.play();
-  box.style.display='flex';boxMsg.textContent='Point the camera at the driver’s QR code';
+  boxMsg.textContent='Point the camera at the driver’s QR code. Hold steady, about 20 cm away.';
   scanning=true;
   const cv=document.createElement('canvas'),cx=cv.getContext('2d',{willReadFrequently:true});
-  const loop=()=>{
+  let busy=false,last=0;
+  const loop=async()=>{
     if(!scanning)return;
-    if(vid.readyState>=2&&vid.videoWidth){
-      const k=Math.min(1,640/vid.videoWidth);
+    const now=performance.now();
+    if(!busy&&now-last>120&&vid.readyState>=2&&vid.videoWidth){
+      busy=true;last=now;
+      const k=Math.min(1,1024/vid.videoWidth);
       cv.width=Math.round(vid.videoWidth*k);cv.height=Math.round(vid.videoHeight*k);
       cx.drawImage(vid,0,0,cv.width,cv.height);
-      const img=cx.getImageData(0,0,cv.width,cv.height);
-      const code=window.jsQR(img.data,img.width,img.height,{inversionAttempts:'dontInvert'});
-      if(code&&code.data){
-        const r=readUpi(code.data);
-        if(r){
-          stopScan();$('upi').value=r.pa;payee=r.pn||'Auto driver';pay();
-          payMsg('QR scanned: '+(r.pn?r.pn+' ':'')+'('+r.pa+'). Check that the name is correct before you pay.');
-          return;
-        }
-        boxMsg.textContent='This is not a UPI payment QR. Try the driver’s payment QR.';
-      }
+      try{
+        const t=await decode(cv,cv.width,cv.height,cx);
+        if(t&&scanning&&!gotCode(t))boxMsg.textContent='This is not a UPI payment QR. Try the driver’s payment QR.';
+      }catch(e){}
+      busy=false;
     }
-    requestAnimationFrame(loop);
+    if(scanning)requestAnimationFrame(loop);
   };
   loop();
+};
+fileBtn.onclick=()=>fileIn.click();
+fileIn.onchange=async()=>{
+  const f=fileIn.files&&fileIn.files[0];fileIn.value='';
+  if(!f)return;
+  payMsg('Reading the QR…');
+  try{
+    await startDetector();
+    try{await loadJsQR()}catch(e){if(!detector)throw e}
+    const bmp=await createImageBitmap(f);
+    const k=Math.min(1,1400/Math.max(bmp.width,bmp.height));
+    const cv=document.createElement('canvas');cv.width=Math.round(bmp.width*k);cv.height=Math.round(bmp.height*k);
+    const cx=cv.getContext('2d',{willReadFrequently:true});cx.drawImage(bmp,0,0,cv.width,cv.height);
+    const t=await decode(cv,cv.width,cv.height,cx);
+    if(!t)payMsg('No QR code found in that photo. Try a clearer, closer photo.');
+    else if(!gotCode(t))payMsg('That QR is not a UPI payment QR.');
+  }catch(err){payMsg((err&&err.message)||'Could not read that image.')}
 };
 
 /* ---------- Fare chart and tariff ---------- */
